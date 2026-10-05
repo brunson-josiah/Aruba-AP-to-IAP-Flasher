@@ -36,10 +36,7 @@ commands = ["mfginfo",
             "boot"]
 
 def getSerialNum():
-    #for AP 277
-    #mfginfo = ser.read_until(b"Country").decode(errors="replace")
-    #for AP 335
-    mfginfo = ser.read_until(b"apboot").decode(errors="replace")
+    mfginfo = ser.read_until(b"Card 1").decode(errors="replace")
     print("MFGINFO LINE " + mfginfo)
     apSerialNumLine = re.search(r"Serial\s*:\s*(\S+)",mfginfo, re.IGNORECASE)
     if apSerialNumLine:
@@ -48,7 +45,7 @@ def getSerialNum():
         return num
     else:
         print("no serial num found")
-        return -1
+        return None
 
 def getHash(serialNum):
     hashInput = f"US-{serialNum}"
@@ -89,12 +86,14 @@ try:
                     if(count == 0):
                        #parse serial number from mfginfo
                        apSerialNum = getSerialNum()
-                       apHash = getHash(apSerialNum)
-                       commands[1] = f"proginv system ccode CCODE-US-{apHash}" #updates commands 1
+                       if apSerialNum:
+                           apHash = getHash(apSerialNum)
+                           commands[1] = f"proginv system ccode CCODE-US-{apHash}" #updates commands 1
+                       else:
+                           print("No Serial number captured, exiting...")
+                           break
                     count+=1
                     
-
-
 
 except KeyboardInterrupt:
     print("\nyou pressed ctrl c, exited")
