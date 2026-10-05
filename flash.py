@@ -18,25 +18,8 @@ firmware = "ArubaInstant_Lupus_8.10.0.22_95256"
 tftpdServer = "192.168.10.210"
 comPort = 4
 
-ser = serial.Serial(f"COM{comPort}", baudrate=9600, timeout=4)
-print("Port opened successfully:", ser.name)
-count = 0
-apSerialNum = ""
-apHash =""
-totalData = ""
-commands = ["mfginfo", 
-            f"proginv system ccode CCODE-US-{apHash}", 
-            "invent -w", 
-            "dhcp", 
-            f"setenv serverip {tftpdServer}", 
-            "clear os 0", 
-            f"upgrade os 0 {firmware}", 
-            "clear os 1", 
-            "saveenv", 
-            "boot"]
-
-def getSerialNum():
-    mfginfo = ser.read_until(b"Card 1").decode(errors="replace")
+def getSerialNum(serialObject):
+    mfginfo = serialObject.read_until(b"Card 1").decode(errors="replace")
     print("MFGINFO LINE " + mfginfo)
     apSerialNumLine = re.search(r"Serial\s*:\s*(\S+)",mfginfo, re.IGNORECASE)
     if apSerialNumLine:
@@ -53,49 +36,74 @@ def getHash(serialNum):
     print(sha1_hash)
     return sha1_hash
 
-def commandEchoed(command, text):
-    if (f"{commands[command]}" in text):
-        print("\n command has been echoed\n")
-        return True
-    else:
-        return False
+#firmware is the name of the fimrware as a string. firmware must be saved in the tftpd folder
+#comPort is the port that is connected to the AP console, in windows labeld COMx in Linux dev/ttyUSBx
+#tftpdServerIP is the IP address of the server, typically the desktop or whereever the firmware is currently stored.
+#bootPart is the partition to overwrite and boot from. Options are 0 or 1
+#clearOtherBootPart is a boolean that will wipe the other partition that is not currently being written. 
 
-try:
-    while True:
-        data = ser.read(ser.in_waiting or 1).decode(errors="replace") #read incoming bytes within the buffer and return to data, or if nothing in buffer, wait until youve read 1 byte and return to data. before retuning to data, decode to ascii and any garbled doody,  replace
+def flashAP(firmware, comPort, tftpdServerIP, bootPart=0):
+    if bootPart!=0 and bootPart!=1:
+        raise ValueError("you must select a boot partion to overwrite. Options are 0 or 1")
+    count = 0
+    apSerialNum = ""
+    apHash = ""
+    totalData = ""
+    commands = ["mfginfo", 
+            f"proginv system ccode CCODE-US-{apHash}", 
+            "invent -w", 
+            "dhcp", 
+            f"setenv serverip {tftpdServerIP}", 
+            f"clear os {bootPart}", 
+            f"upgrade os {bootPart} {firmware}", 
+            f"setenv os_partition {bootPart}",
+            "saveenv", 
+            "boot"]
 
-        if data:#if there is anything in data
-            totalData+=data
-            print(data, end="")
-#stop autoboot
-            if "Hit <Enter> to stop autoboot:" in totalData:
-                totalData = ""
-                count = 0 #reset count in case the boot times out, this way it will continue working through all the commands when it reboots
-                ser.write(b"\r\n")#the carriage return or enter command, b means send the literal bytes instead of the string \r\n 
-#begin sending commands, first and second commands will be unique to each ap, all commands after that will be the same
-            if "apboot>" in totalData: #we need to wait for apboot AND have seen our last command echoed 
-                totalData = ""
-                if count < len(commands):
-                    ser.write(commands[count].encode() + b"\r\n")
-                    print(f"\nSent command[{count}]: {commands[count]}\n")
-                    time.sleep(1)
-                    if count == len(commands) - 1: #last command resets, drop serial connection or else you will keep overwriting
-                        print("just finished reset command, exiting script")
-                        break
-                    #for first command, find the serial code and sha value
-                    if(count == 0):
-                       #parse serial number from mfginfo
-                       apSerialNum = getSerialNum()
-                       if apSerialNum:
-                           apHash = getHash(apSerialNum)
-                           commands[1] = f"proginv system ccode CCODE-US-{apHash}" #updates commands 1
-                       else:
-                           print("No Serial number captured, exiting...")
-                           break
-                    count+=1
+    ser = serial.Serial(f"COM{comPort}", baudrate=9600, timeout=4)
+    print("Port opened successfully:", ser.name)
+    try:
+        while True:
+            data = ser.read(ser.in_waiting or 1).decode(errors="replace") #read incoming bytes within the buffer and return to data, or if nothing in buffer, wait until youve read 1 byte and return to data. before retuning to data, decode to ascii and any garbled doody,  replace
+
+            if data:#if there is anything in data
+                totalData+=data
+                print(data, end="")
+    #stop autoboot
+                if "Hit <Enter> to stop autoboot:" in totalData:
+                    totalData = ""
+                    count = 0 #reset count in case the boot times out, this way it will continue working through all the commands when it reboots
+                    ser.write(b"\r\n")#the carriage return or enter command, b means send the literal bytes instead of the string \r\n 
+    #begin sending commands, first and second commands will be unique to each ap, all commands after that will be the same
+                if "apboot>" in totalData: #we need to wait for apboot AND have seen our last command echoed 
+                    totalData = ""
+                    if count < len(commands):
+                        ser.write(commands[count].encode() + b"\r\n")
+                        print(f"\nSent command[{count}]: {commands[count]}\n")
+                        time.sleep(1)
+                        if count == len(commands) - 1: #last command resets, drop serial connection or else you will keep overwriting
+                            print("just finished reset command, exiting script")
+                            break
+                        #for first command, find the serial code and sha value
+                        if(count == 0):
+                        #parse serial number from mfginfo
+                            apSerialNum = getSerialNum(ser)
+                        if apSerialNum:
+                            apHash = getHash(apSerialNum)
+                            commands[1] = f"proginv system ccode CCODE-US-{apHash}" #updates commands 1
+                        else:
+                            print("No Serial number captured, exiting...")
+                            break
+                        count+=1
                     
 
-except KeyboardInterrupt:
-    print("\nyou pressed ctrl c, exited")
-finally:
-    ser.close()
+    except KeyboardInterrupt:
+        print("\nyou pressed ctrl c, exited")
+    finally:
+        ser.close()
+
+if __name__ == "__main__":
+    try:
+        flashAP("ArubaInstant_Lupus_8.10.0.22_95256",4,"192.168.10.210")
+    except ValueError as e:
+        print(f"Error: {e}")
